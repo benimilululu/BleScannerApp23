@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1042423008132",
+    "project_id": "smartadd-7efd9",
+    "storage_bucket": "smartadd-7efd9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1042423008132:android:684d0ae0faa60ae0abebd1",
+        "android_client_info": {
+          "package_name": "com.blescannerapp23"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBofNii2r9htkpD5XVSrRYlwrK37NZeIdk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
