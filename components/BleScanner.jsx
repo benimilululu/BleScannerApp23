@@ -3,80 +3,128 @@ import {
   View,
   Text,
   FlatList,
-  Button,
   PermissionsAndroid,
   Platform,
   Image,
   TouchableOpacity,
-  Modal,
   StyleSheet,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import firestore from '@react-native-firebase/firestore'; // Corrected Firestore import
+import { createClient } from '@supabase/supabase-js';
+import { URL } from 'react-native-url-polyfill';
+
+// Polyfill for URL API
+global.URL = URL;
+
+// Supabase Configuration
+const SUPABASE_URL = 'https://agqjwbyzzgvwocpwkont.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFncWp3Ynl6emd2d29jcHdrb250Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA1MDU2OTYsImV4cCI6MjA1NjA4MTY5Nn0.HAi3mbCfXjVayHKBcqbwwLZCbPwKWhJ82OsA41WTLGw';
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    detectSessionInUrl: Platform.OS === 'android' ? false : true,
+  },
+});
 
 const BleScanner = ({ user, userRole }) => {
   const navigation = useNavigation();
   const [devices, setDevices] = useState([]);
   const [isScanning, setIsScanning] = useState(false);
-  const [showBanner, setShowBanner] = useState(false);
-  const [firestoreDevices, setFirestoreDevices] = useState([]); // Devices from Firestore
+  const [isLoading, setIsLoading] = useState(true);
+  const [supabaseDevices, setSupabaseDevices] = useState([]);
+  const [activeCategory, setActiveCategory] = useState('All'); // State for active category
   const bleManager = useRef(new BleManager()).current;
   const scanInterval = useRef(null);
-  // const [targetDeviceName] = useState('Holy-IOT');
 
-  // Fetch devices from Firestore
-  useEffect(() => {
-    const fetchDevices = async () => {
-      try {
-        const querySnapshot = await firestore().collection('devices').get();
-        const devices = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setFirestoreDevices(devices);
-      } catch (error) {
-        console.error('Error fetching devices from Firestore:', error);
-      }
-    };
+  // Categories
+  const categories = ['All', 'Fashion', 'Cars', 'Electronics', 'Accessories'];
 
-    fetchDevices();
-  }, []);
-
-  // Animation for modal
-  const toggleBanner = (show) => {
-    setShowBanner(show);
+  // Request permissions function
+  const requestLocationPermission = async () => {
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+      );
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    }
+    return true;
   };
 
-  // Save scanned devices to history
-  const saveToHistory = async (device) => {
-    try {
-      const history = await AsyncStorage.getItem('scanHistory');
-      const parsedHistory = history ? JSON.parse(history) : [];
-
-      // Check if the device already exists in the history
-      const existingDeviceIndex = parsedHistory.findIndex(
-        (item) => item.device.id === device.id
+  const requestBluetoothPermissions = async () => {
+    if (Platform.OS === 'android' && Platform.Version >= 31) {
+      const granted = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+      ]);
+      return (
+        granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] ===
+          PermissionsAndroid.RESULTS.GRANTED &&
+        granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] ===
+          PermissionsAndroid.RESULTS.GRANTED
       );
+    }
+    return true;
+  };
 
-      if (existingDeviceIndex !== -1) {
-        // If the device exists, update its lastSeen timestamp
-        parsedHistory[existingDeviceIndex].lastSeen = Date.now();
-      } else {
-        // If the device doesn't exist, add it to the history
-        parsedHistory.push({ device, lastSeen: Date.now() });
-      }
+  const checkBluetoothState = () => {
+    // Add your Bluetooth state check logic here if needed
+  };
 
-      // Save the updated history back to AsyncStorage
-      await AsyncStorage.setItem('scanHistory', JSON.stringify(parsedHistory));
+  // Fetch devices from Supabase
+  const fetchSupabaseDevices = async () => {
+    try {
+      const { data, error } = await supabase.from('adds').select('*');
+      if (error) throw error;
+      console.log('Supabase devices fetched:', data);
+      setSupabaseDevices(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error('Error saving to history:', error);
+      console.error('Error fetching devices from Supabase:', error);
+    } finally {
+      setIsLoading(false); // Data fetching is complete
     }
   };
 
-  // Scan for BLE devices
+  // Save scanned device to history
+  const saveToHistory = async (device) => {
+    const matchedSupabaseDevice = supabaseDevices.find(
+      (d) => d.device_id === device.id
+    );
+
+    if (matchedSupabaseDevice) {
+      const historyItem = {
+        id: matchedSupabaseDevice.id,
+        deviceId: matchedSupabaseDevice.device_id,
+        deviceName: matchedSupabaseDevice.name || 'Unnamed',
+        company: matchedSupabaseDevice.company || 'Unnamed',
+        lastSeen: Date.now(),
+        description: matchedSupabaseDevice.description || '',
+        img: matchedSupabaseDevice.img || '',
+      };
+
+      try {
+        const history = await AsyncStorage.getItem('scanHistory');
+        const parsedHistory = history ? JSON.parse(history) : [];
+        const existingDeviceIndex = parsedHistory.findIndex(
+          (item) => item.deviceId === historyItem.deviceId
+        );
+
+        if (existingDeviceIndex !== -1) {
+          parsedHistory[existingDeviceIndex].lastSeen = Date.now();
+        } else {
+          parsedHistory.push(historyItem);
+        }
+
+        await AsyncStorage.setItem('scanHistory', JSON.stringify(parsedHistory));
+      } catch (error) {
+        console.error('Error saving to history:', error);
+      }
+    }
+  };
+
+  // Scan for BLE devices and compare with Supabase
   const startScan = () => {
     if (isScanning) return;
 
@@ -88,22 +136,22 @@ const BleScanner = ({ user, userRole }) => {
         return;
       }
 
-      // Check if the scanned device matches any device in Firestore
-      const matchedDevice = firestoreDevices.find(
-        (d) => d.id === device.id && d.name === device.name
+      console.log('Scanned device:', device.id, device.name);
+      console.log(supabaseDevices);
+
+      const matchedSupabaseDevice = supabaseDevices.find(
+        (d) => d.device_id === device.id
       );
 
-      if (matchedDevice) {
+      if (matchedSupabaseDevice) {
         setDevices((prev) => {
           const exists = prev.some((d) => d.device.id === device.id);
           if (!exists) {
-            toggleBanner(true); // Only show the banner when the device is found
-            saveToHistory(device); // Save the device to history
+            saveToHistory(device);
             return [...prev, { device, lastSeen: Date.now() }];
           } else {
-            // Update the last seen timestamp if the device is already in the list
             return prev.map((d) =>
-              d.device.id === device.id ? { ...d, lastSeen: Date.now() } : d,
+              d.device.id === device.id ? { ...d, lastSeen: Date.now() } : d
             );
           }
         });
@@ -113,109 +161,160 @@ const BleScanner = ({ user, userRole }) => {
     setTimeout(() => {
       bleManager.stopDeviceScan();
       setIsScanning(false);
-    }, 2000);
+    }, 5000); // Scan for 4 seconds each time
   };
 
-  // Start scan cycle every 10 seconds
+  // Start continuous scanning every 5 seconds
   const startScanCycle = () => {
-    if (scanInterval.current) clearInterval(scanInterval.current); // Clear any existing interval
+    if (scanInterval.current) clearInterval(scanInterval.current);
     scanInterval.current = setInterval(() => {
       startScan();
-    }, 10000); // Scan every 10 seconds
+    }, 10000); // Scan every 10 seconds (5000ms)
   };
 
-  // Cleanup
+  // Start scanning automatically when component mounts
   useEffect(() => {
-    return () => {
-      if (scanInterval.current) clearInterval(scanInterval.current); // Clear the interval on unmount
-      bleManager.destroy();
-    };
-  }, []);
-
-  // Initial setup
-  useEffect(() => {
-    const requestPermissions = async () => {
+    const initializeAndScan = async () => {
       const locationGranted = await requestLocationPermission();
       const bluetoothGranted = await requestBluetoothPermissions();
 
       if (locationGranted && bluetoothGranted) {
-        checkBluetoothState(); // Check Bluetooth state after permissions are granted
+        checkBluetoothState();
+        await fetchSupabaseDevices(); // Wait for data to be fetched
+        if (!isLoading) {
+          startScan(); // Initial scan on mount
+          startScanCycle(); // Start the 5-second interval scanning
+        }
       }
     };
-    requestPermissions();
-  }, []);
 
-  // Remove devices that haven't been seen for 1 minute
-  useEffect(() => {
-    const cleanupInterval = setInterval(() => {
-      setDevices((prev) => prev.filter((d) => Date.now() - d.lastSeen < 60000));
-    }, 60000); // Check every minute
+    initializeAndScan();
 
-    return () => clearInterval(cleanupInterval);
-  }, []);
+    // Cleanup on unmount
+    return () => {
+      if (scanInterval.current) clearInterval(scanInterval.current);
+      bleManager.stopDeviceScan();
+      bleManager.destroy();
+    };
+  }, [isLoading]); // Re-run when isLoading changes
+
+  // Filter devices based on active category
+  const filteredDevices = devices.filter((item) => {
+    const matchedSupabaseDevice = supabaseDevices.find(
+      (d) => d.device_id === item.device.id
+    );
+    if (activeCategory === 'All') return true;
+    return matchedSupabaseDevice?.category === activeCategory.toLocaleLowerCase();
+  });
 
   return (
     <View style={styles.container}>
-      {/* Modal Banner */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={showBanner}
-        onRequestClose={() => toggleBanner(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            {/* <Image
-              source={require('../assets/porsche.jpg')}
-              style={styles.bannerImage}
-            /> */}
-            <View style={styles.bannerText}>
-              <Text style={styles.bannerTitle}>Holy-IOT Detected!</Text>
-              <Text style={styles.bannerSubtitle}>Device is within range</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => toggleBanner(false)}
-            >
-              <Icon name="close-circle" size={24} color="white" />
-            </TouchableOpacity>
-          </View>
+      {/* {isScanning && (
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color="#2ecc71" />
+          <Text style={styles.loaderText}>Scanning...</Text>
         </View>
-      </Modal>
-
-      {/* Scan Controls */}
-      <View style={styles.controls}>
-        <Button
-          title={isScanning ? 'Scanning...' : 'Start Scan'}
-          onPress={startScan}
-          disabled={isScanning}
-          color="#2ecc71"
-        />
+      )} */}
+  
+      {/* Categories Section */}
+      <Text style={styles.headerText}>Categories</Text>
+      <View >
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        
+        style={styles.categoryContainer}
+      >
+        {categories.map((category) => (
+          <TouchableOpacity
+            key={category}
+            style={[
+              styles.categoryButton,
+              activeCategory === category && styles.activeCategoryButton,
+            ]}
+            onPress={() => setActiveCategory(category)}
+          >
+            <Text
+              style={[
+                styles.categoryText,
+                activeCategory === category && styles.activeCategoryText,
+              ]}
+            >
+              {category}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
       </View>
-
-      {/* Devices List */}
+  
+      {/* Scanned Devices Section */}
+      <View style={styles.header}>
+        <Text style={styles.headerText}>
+          {filteredDevices.length > 0 ? 'Scanned Devices' : 'No Devices Found Yet'}
+        </Text>
+      </View>
+  
       <FlatList
-        data={devices}
+        data={filteredDevices}
         style={styles.list}
         keyExtractor={(item) => item.device.id}
-        renderItem={({ item }) => (
-          <View style={styles.deviceCard}>
-            <Icon name="bluetooth" size={24} color="#3498db" />
-            <View style={styles.deviceInfo}>
-              <Text style={styles.deviceName}>{item.device.name}</Text>
-              <Text style={styles.deviceId}>{item.device.id}</Text>
-            </View>
-          </View>
-        )}
+        renderItem={({ item }) => {
+          const supabaseDevice = supabaseDevices.find(
+            (d) => d.device_id === item.device.id
+          );
+          return (
+            <TouchableOpacity
+              style={styles.deviceCard}
+              onPress={() =>
+                navigation.navigate('DeviceDetails', {
+                  device: supabaseDevice || item.device,
+                })
+              }
+            >
+              <View style={styles.deviceContent}>
+                {supabaseDevice?.img && (
+                  <Image
+                    source={{ uri: supabaseDevice.img }}
+                    style={styles.deviceImage}
+                    resizeMode="contain"
+                    onError={(e) =>
+                      console.log('Image load error:', e.nativeEvent.error)
+                    }
+                  />
+                )}
+                <View style={styles.deviceInfo}>
+                  <Text style={styles.deviceCompany}>
+                    {supabaseDevice
+                      ? supabaseDevice.company
+                      : item.device.name || 'Unnamed'}
+                  </Text>
+                  <Text style={styles.deviceName}>
+                    {supabaseDevice
+                      ? supabaseDevice.name
+                      : item.device.name || 'Unnamed'}
+                  </Text>
+                  {supabaseDevice?.description && (
+                    <Text style={styles.price}>
+                      {supabaseDevice.description.substring(0, 40)}
+                      {supabaseDevice.description.length > 40 ? '...' : ''}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
       />
-
-      {/* History Button */}
-      <TouchableOpacity
-        style={styles.historyButton}
-        onPress={() => navigation.navigate('History')}
-      >
-        <Text style={styles.historyButtonText}>View History</Text>
-      </TouchableOpacity>
+  
+      {/* View History Button */}
+      <View style={styles.buttonContainer}>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={() => navigation.navigate('History')}
+        >
+          <Text style={styles.buttonText}>View History</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
@@ -224,92 +323,127 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f6fa',
-    padding: 20,
+    padding: 20, // Keep padding for overall spacing
   },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  modalContent: {
-    backgroundColor: '#27ae60',
-    padding: 20,
-    borderRadius: 10,
-    width: '80%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bannerImage: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    marginBottom: 15,
-  },
-  bannerText: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  bannerTitle: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  bannerSubtitle: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 14,
-  },
-  closeButton: {
+  loaderContainer: {
     position: 'absolute',
-    top: 10,
-    right: 10,
-    padding: 5,
+    top: '40%',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 1,
   },
-  controls: {
-    marginTop: 60,
-    marginBottom: 20,
+  loaderText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#2c3e50',
+    fontWeight: '500',
+  },
+  header: {
+    marginBottom: 0, // Remove marginBottom
+  },
+  headerText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 0, // Remove marginBottom
   },
   deviceCard: {
     backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderRadius: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  deviceContent: {
+    flexDirection: 'row',
+  },
+  deviceImage: {
+    width: 130,
+    height: '106%',
+    resizeMode: 'cover',
   },
   deviceInfo: {
-    marginLeft: 15,
+    flex: 1,
+    flexDirection: 'column',
+    padding: 16,
+    flexShrink: 1,
   },
   deviceName: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
     color: '#2c3e50',
+    marginBottom: 8,
   },
-  deviceId: {
-    fontSize: 12,
+  deviceCompany: {
+    fontSize: 16,
+    fontWeight: '600',
     color: '#7f8c8d',
-    marginTop: 4,
+    marginBottom: 8,
+  },
+  price: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#2ecc71',
+    marginBottom: 8,
+    width: '100%',
+    flexWrap: 'wrap',
   },
   list: {
     flex: 1,
+    marginTop: 0, // Ensure no extra margin
   },
-  historyButton: {
+  buttonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     position: 'absolute',
     bottom: 20,
-    alignSelf: 'center',
-    backgroundColor: '#3498db',
-    padding: 15,
-    borderRadius: 10,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
   },
-  historyButtonText: {
+  button: {
+    backgroundColor: '#3498db',
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderRadius: 8,
+    marginHorizontal: 20,
+  },
+  buttonText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
+    textAlign: 'center',
+  },
+  categoryContainer: {
+    marginTop: 0, // Remove marginTop
+    marginBottom: 0,
+    paddingBottom: 20, // Remove paddingBottom
+  },
+  categoryButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    backgroundColor: '#e0e0e0',
+    marginRight: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 40,
+  },
+  activeCategoryButton: {
+    backgroundColor: '#3498db',
+  },
+  categoryText: {
+    fontSize: 14,
+    color: '#2c3e50',
+  },
+  activeCategoryText: {
+    color: '#ffffff',
   },
 });
 

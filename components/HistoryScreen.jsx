@@ -1,56 +1,94 @@
-// components/HistoryScreen.js
 import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  Image,
+  TouchableOpacity,
+} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
 
 const HistoryScreen = () => {
-  const [history, setHistory] = useState([]);
+  const [scanHistory, setScanHistory] = useState([]);
+  const navigation = useNavigation();
 
-  // Fetch history from AsyncStorage
+  
+
+  const getHistory = async () => {
+    try {
+      const history = await AsyncStorage.getItem('scanHistory');
+      const parsedHistory = history ? JSON.parse(history) : [];
+      console.log('Parsed History:', parsedHistory); // Debugging line
+      setScanHistory(parsedHistory);
+    } catch (error) {
+      console.error('Error fetching history:', error);
+    }
+  };
+
+// Delete the history from the async storage ->
+  const clearHistory = async () => {
+    try {
+      await AsyncStorage.removeItem('scanHistory');
+      setScanHistory([]); // Clear the state to update UI immediately
+      console.log('History cleared successfully');
+    } catch (error) {
+      console.error('Error clearing history:', error);
+    }
+  };
+
   useEffect(() => {
-    const fetchHistory = async () => {
-      try {
-        const history = await AsyncStorage.getItem('scanHistory');
-        if (history) {
-          const parsedHistory = JSON.parse(history);
-          setHistory(parsedHistory);
-        }
-      } catch (error) {
-        console.error('Error fetching history:', error);
-      }
-    };
-    fetchHistory();
+    // clearHistory(); // Clear history for testing
+    getHistory();
   }, []);
 
-  // Filter history for the last 10 days and remove duplicates
-  const filteredHistory = history
-    .filter((item) => {
-      const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
-      return item.lastSeen >= tenDaysAgo;
-    })
-    .reduce((uniqueDevices, item) => {
-      // Check if the device is already in the uniqueDevices array
-      if (!uniqueDevices.some((device) => device.device.id === item.device.id)) {
-        uniqueDevices.push(item);
-      }
-      return uniqueDevices;
-    }, []);
+  const renderItem = ({ item }) => {
+    if (!item.deviceId) {
+      return null; // Skip if deviceId is undefined
+    }
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Scan History (Last 10 Days)</Text>
-      <FlatList
-        data={filteredHistory}
-        keyExtractor={(item) => item.device.id}
-        renderItem={({ item }) => (
-          <View style={styles.historyItem}>
-            <Text style={styles.deviceName}>{item.device.name}</Text>
-            <Text style={styles.deviceId}>{item.device.id}</Text>
+    return (
+      <TouchableOpacity
+        style={styles.deviceCard}
+        onPress={() =>
+          navigation.navigate('DeviceDetails', { device: item })
+        }
+      >
+        <View style={styles.deviceContent}>
+          {item.img && (
+            <Image
+              source={{ uri: item.img }}
+              style={styles.deviceImage}
+              resizeMode="cover"
+              onError={(e) => console.log('Image load error:', e.nativeEvent.error)}
+            />
+          )}
+          <View style={styles.deviceInfo}>
+            <Text style={styles.deviceCompany}>{item.company}</Text>
+            <Text style={styles.deviceName}>{item.deviceName}</Text>
+            {item.description && (
+              <Text style={styles.description}>
+                {item.description.substring(0, 40)}
+                {item.description.length > 40 ? '...' : ''}
+              </Text>
+            )}
             <Text style={styles.lastSeen}>
               Last Seen: {new Date(item.lastSeen).toLocaleString()}
             </Text>
           </View>
-        )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      <FlatList
+        data={scanHistory}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.deviceId}
+        contentContainerStyle={styles.listContainer}
       />
     </View>
   );
@@ -62,31 +100,56 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f6fa',
     padding: 20,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 20,
+  listContainer: {
+    paddingBottom: 20,
   },
-  historyItem: {
+  deviceCard: {
     backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
+    marginBottom: 16,
+    overflow: 'hidden',
   },
-  deviceName: {
+  deviceContent: {
+    flexDirection: 'row',
+  },
+  deviceImage: {
+    width: 130,
+    height: '%',
+    resizeMode: 'cover',
+  },
+  deviceInfo: {
+    flex: 1,
+    flexDirection: 'column',
+    padding: 16,
+    flexShrink: 1,
+  },
+  deviceCompany: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
-  },
-  deviceId: {
-    fontSize: 12,
     color: '#7f8c8d',
-    marginTop: 4,
+    marginBottom: 4,
+  },
+  deviceName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 8,
+  },
+  description: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#2ecc71',
+    marginBottom: 8,
+    flexWrap: 'wrap',
   },
   lastSeen: {
-    fontSize: 12,
+    fontSize: 14,
     color: '#95a5a6',
-    marginTop: 4,
   },
 });
 
