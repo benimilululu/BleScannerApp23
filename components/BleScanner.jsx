@@ -10,12 +10,15 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
+  AppState,
 } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 import { URL } from 'react-native-url-polyfill';
+import BackgroundService from 'react-native-background-actions';
+import PushNotification from 'react-native-push-notification';
 
 // Polyfill for URL API
 global.URL = URL;
@@ -29,15 +32,38 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   },
 });
 
-const BleScanner = ({ user, userRole }) => {
+// Configure Push Notifications
+PushNotification.configure({
+  onNotification: function (notification) {
+    console.log('NOTIFICATION:', notification);
+  },
+  requestPermissions: Platform.OS === 'ios',
+});
+
+if (Platform.OS === 'android') {
+  PushNotification.createChannel(
+    {
+      channelId: 'ble-scanner-channel',
+      channelName: 'BLE Scanner Notifications',
+      channelDescription: 'Notifications for BLE device detection',
+      soundName: 'default',
+      importance: 4,
+      vibrate: true,
+    },
+    (created) => console.log(`Channel created: ${created}`)
+  );
+}
+
+const BleScanner = () => {
   const navigation = useNavigation();
   const [devices, setDevices] = useState([]);
   const [isScanning, setIsScanning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [supabaseDevices, setSupabaseDevices] = useState([]);
-  const [activeCategory, setActiveCategory] = useState('All'); // State for active category
+  const [activeCategory, setActiveCategory] = useState('All');
   const bleManager = useRef(new BleManager()).current;
   const scanInterval = useRef(null);
+  const appState = useRef(AppState.currentState);
 
   // Categories
   const categories = ['All', 'Fashion', 'Cars', 'Electronics', 'Accessories'];
@@ -83,7 +109,7 @@ const BleScanner = ({ user, userRole }) => {
     } catch (error) {
       console.error('Error fetching devices from Supabase:', error);
     } finally {
-      setIsLoading(false); // Data fetching is complete
+      setIsLoading(false);
     }
   };
 
@@ -144,10 +170,27 @@ const BleScanner = ({ user, userRole }) => {
       );
 
       if (matchedSupabaseDevice) {
+        // // Check if app is in background
+        // if (appState.current === 'background') {
+        //   PushNotification.localNotification({
+        //     channelId: 'ble-scanner-channel',
+        //     title: 'Device Found',
+        //     message: `Matched device: ${matchedSupabaseDevice.name || device.name || 'Unnamed'}`,
+        //   });
+        // }
+
         setDevices((prev) => {
           const exists = prev.some((d) => d.device.id === device.id);
           if (!exists) {
             saveToHistory(device);
+            // Check if app is in background
+         if (appState.current === 'background') {
+          PushNotification.localNotification({
+            channelId: 'ble-scanner-channel',
+            title: `${matchedSupabaseDevice.name || device.name || 'Unnamed'}`,
+            message: `New Add Found`,
+          });
+        }
             return [...prev, { device, lastSeen: Date.now() }];
           } else {
             return prev.map((d) =>
@@ -172,6 +215,61 @@ const BleScanner = ({ user, userRole }) => {
     }, 10000); // Scan every 10 seconds (5000ms)
   };
 
+  // Background scanning task
+  const backgroundTask = async (taskData) => {
+    console.log('Background task started');
+    while (BackgroundService.isRunning()) {
+      startScan(); // Use the same scan function
+      await sleep(10000); // Wait 10 seconds before next scan
+    }
+  };
+
+  const sleep = (time) => new Promise((resolve) => setTimeout(resolve, time));
+
+  // Start background service
+  const startBackgroundService = async () => {
+    const options = {
+      taskName: 'BLE Scanner',
+      taskTitle: 'BLE Scanner Running',
+      taskDesc: 'Scanning for BLE devices in the background',
+      taskIcon: { name: 'ic_launcher', type: 'mipmap' },
+      color: '#ff00ff',
+      parameters: {},
+    };
+
+    try {
+      console.log('Starting background service...');
+      await BackgroundService.start(backgroundTask, options);
+      await BackgroundService.updateNotification({ taskDesc: 'Scanning in progress...' });
+      console.log('Background service started');
+    } catch (error) {
+      console.error('Error starting background service:', error);
+    }
+  };
+
+  // Handle app state changes
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState) => {
+      console.log('App state changed to:', nextAppState);
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        console.log('App has come to the foreground!');
+        BackgroundService.stop();
+        startScanCycle(); // Resume foreground scanning
+      } else if (nextAppState === 'background') {
+        console.log('App has gone to the background!');
+        if (scanInterval.current) clearInterval(scanInterval.current);
+        startBackgroundService();
+      }
+      appState.current = nextAppState;
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
   // Start scanning automatically when component mounts
   useEffect(() => {
     const initializeAndScan = async () => {
@@ -195,6 +293,7 @@ const BleScanner = ({ user, userRole }) => {
       if (scanInterval.current) clearInterval(scanInterval.current);
       bleManager.stopDeviceScan();
       bleManager.destroy();
+      BackgroundService.stop();
     };
   }, [isLoading]); // Re-run when isLoading changes
 
@@ -323,7 +422,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f6fa',
-    padding: 20, // Keep padding for overall spacing
+    padding: 20,
   },
   loaderContainer: {
     position: 'absolute',
@@ -340,13 +439,13 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   header: {
-    marginBottom: 0, // Remove marginBottom
+    marginBottom: 0,
   },
   headerText: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#2c3e50',
-    marginBottom: 0, // Remove marginBottom
+    marginBottom: 0,
   },
   deviceCard: {
     backgroundColor: 'white',
@@ -395,7 +494,7 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
-    marginTop: 0, // Ensure no extra margin
+    marginTop: 0,
   },
   buttonContainer: {
     flexDirection: 'row',
@@ -421,9 +520,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   categoryContainer: {
-    marginTop: 0, // Remove marginTop
+    marginTop: 0,
     marginBottom: 0,
-    paddingBottom: 20, // Remove paddingBottom
+    paddingBottom: 20,
   },
   categoryButton: {
     paddingHorizontal: 12,

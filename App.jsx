@@ -6,6 +6,10 @@ import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import { getUniqueId } from 'react-native-device-info';
 
+// Push Notification
+import PushNotification from 'react-native-push-notification';
+
+
 // Components
 import BleScanner from './components/BleScanner';
 import HistoryScreen from './components/HistoryScreen';
@@ -14,10 +18,18 @@ import DeviceList from './components/DeviceList';
 
 const Stack = createStackNavigator();
 
-// Enable Firestore persistence
-firestore()
-  .settings({ persistence: true })
-  .catch((err) => console.log('Error enabling Firestore persistence:', err));
+// Create the notification channel
+PushNotification.createChannel(
+  {
+    channelId: 'ble-scanner-channel', // Unique channel ID
+    channelName: 'BLE Scanner Notifications', // Channel name visible to the user
+    channelDescription: 'Notifications for BLE device scanning', // Channel description
+    soundName: 'default', // Sound for notifications
+    importance: 4, // Importance level (4 = high)
+    vibrate: true, // Enable vibration
+  },
+  (created) => console.log(`Notification channel created: ${created}`) // Callback
+);
 
 const App = () => {
   const [loading, setLoading] = useState(true);
